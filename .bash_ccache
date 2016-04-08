@@ -1,0 +1,4 @@
+export USE_CCACHE=1
+export CCACHE_DIR=~/work/disk1/.ccache
+ccache -M 110G
+#export OUT_DIR_COMMON_BASE=~/work/disk3/out

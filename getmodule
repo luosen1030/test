@@ -1,0 +1,442 @@
+#!/usr/bin/perl
+use warnings;
+use strict;
+
+use File::Basename;
+
+
+($#ARGV == -1 ||$ARGV[0]=~/^(-|\/)(h|\?)$/i ) && &Usage;
+
+
+my $option="";
+my @targ;
+
+foreach (@ARGV)
+{
+	if(/^-([a-z?]+)/i)
+	{
+		$option.="$1";
+	}
+	else
+	{	
+		push(@targ,$_);
+	}
+}
+
+my @option;
+@option=split //,$option;
+my %b=();
+%b=();
+$b{$_}=1 foreach @option;
+my %option=%b;
+
+print "请在项目的根目录下运行本程序,否则部分输出结果可能得不到\n";
+foreach (@targ)
+{
+	chomp($_);
+	unless(-e "$_")
+	{
+		printRed_R ("$_不存在\n");
+		next;
+	}
+	
+	if (-d "$_")
+	{
+		my $temp=`find  $_  -maxdepth 1 -iname "*.c" -or -iname "*.cpp" -o  -iname "*.java" | head -n 1 ` ;
+		if($temp)
+		{
+			$_=$temp;
+			chomp($_);
+			print "由于是目录,用一个扩展的文件进行查找,$_\n";
+		}
+		
+	}
+
+	printWhite("对文件$_进行处理\n\n");
+	printRed ("**根据所在的目录判断**\n");
+	
+	my $helpInfo= <<"__HELPINFO";
+ a ./mk kk
+*b ./mk k
+ c ./mk r k;./mk bootimage;
+ d ./mk n k;./mk bootimage; 
+ e ./mk \$project r k;./out/host/linux-x86/bin/mkbootimg --kernel kernel/out/kernel_\${project}.bin --ramdisk ./out/target/product/\${project}/ramdisk.img -o ./out/target/product/\${project}/boot.img
+ f ./mk \$project n k;./out/host/linux-x86/bin/mkbootimg --kernel kernel/out/kernel_\${project}.bin --ramdisk ./out/target/product/\${project}/ramdisk.img -o ./out/target/product/\${project}/boot.img
+__HELPINFO
+	getModuleFromdir($_,"kernel","",$helpInfo);
+
+$helpInfo= <<"__HELPINFO";
+./mk r pl
+__HELPINFO
+	getModuleFromdir($_,"preloader","",$helpInfo);
+	
+	
+$helpInfo= <<"__HELPINFO";
+./mk r uboot
+__HELPINFO
+	getModuleFromdir($_,"uboot","",$helpInfo);
+	
+	
+$helpInfo= <<"__HELPINFO";
+./mk r lk
+__HELPINFO
+	getModuleFromdir($_,"lk","",$helpInfo);
+	
+	
+	
+	$helpInfo= <<"__HELPINFO";
+* a
+./mk mm bootable/recovery/ ;
+./mk r kernel ;
+./mk -opt=ONE_SHOT_MAKEFILE=build/target/board/Android.mk r recoveryimage
+-------------------
+b
+./mk recoverimage
+__HELPINFO
+	getModuleFromdir($_,"recovery","",$helpInfo);
+	
+$helpInfo= <<"__HELPINFO";
+./mk secroimage
+__HELPINFO
+	getModuleFromdir($_,"secro","",$helpInfo);
+	
+$helpInfo= <<"__HELPINFO";
+./mk mm ./mediatek/factory/
+__HELPINFO
+	getModuleFromdir($_,"factory","",$helpInfo);
+	
+	getModuleFromdir($_,"mediatek/source/frameworks","frameworks/base");
+	getModuleFromdir($_,"cgen","libcustom_nvram");
+	
+	print "\n";
+	printYellow ("**根据所在的目录的makefile文件判断**\n");
+	my $isok=getModuleFormMakefile($_);   
+
+	print "\n";
+	unless ($isok)
+	{
+		if($_=~m{\bmediatek/custom\b})
+		{
+			if(-f $_)
+			{
+				printRed_R ("**检查相关的link文件**\n");
+				handlink($_);
+			}
+		}
+	}
+	print "\n";
+	printPink ("**根据输出的临时文件判断**\n");
+	getModuleFormOutput($_);
+	print "==========================================\n";
+}
+
+sub handlink
+{
+	my($filename)=@_;
+	my ($BaseName,$BinPath)= &fileparse($filename);
+	
+	my $finddir=$filename;
+	$finddir=~s{\bmediatek/custom\b.*}{mediatek/platform};
+	
+	my $out=`find -L $finddir -iname $BaseName| head -n 1 ` ;
+	chomp $out;
+	if($out)
+	{
+		printWhite("对文件$out进行处理\n\n");
+		getModuleFormMakefile($out);
+	}
+}
+	
+sub getModuleFromdir
+{
+	local $_;
+	my($dir,$comparedir,$module,$help)=@_;
+	
+	unless ($module)
+	{
+		$module=$comparedir;
+	}
+	if($dir=~m{\b$comparedir\b})
+	{
+		printGreen ("可能的模块是: $module\n");
+		if( $option{"v"} && $help)
+		{
+			printGreenBlue("可能的编译方法:\n".$help);
+		}
+	}
+}
+
+sub getModuleFormMakefile
+{
+	local $_;
+	my ($name)=@_;
+	my ($BaseName,$BinPath)= &fileparse($name);
+	my $isok=0;
+	my $old="";
+	
+	while($old ne $BinPath)
+	{
+		my $module;
+		my $currentModuleName="";
+		$old=$BinPath;
+		if(-e "$BinPath/Android.mk")
+		{
+
+			open(my $filename,"<${BinPath}Android.mk") or die "打开文件${BinPath}Android.mk错误,$!";
+			while(<$filename>)
+			{
+				if(s/#.+//)
+				{
+				}
+				elsif (/\s*LOCAL_MODULE\s*[?:+]?=\s*(\S+)\s*/)
+				{
+					$currentModuleName=$1;
+					$module->{$currentModuleName}->{"name"}=$1;
+				}
+				elsif (/\s*LOCAL_PACKAGE_NAME\s*[?:+]?=\s*(\S+)\s*/)
+				{
+					$currentModuleName=$1;
+					$module->{$currentModuleName}->{"name"}=$1;
+				}
+				elsif (/\s*LOCAL_MODULE_PATH\s*[?:+]?=\s*(\S+)\s*/)
+				{
+					$module->{$currentModuleName}->{"path"}=$1;
+				}
+				elsif (/include\s+\$\(CLEAR_VARS\)/)
+				{
+					$currentModuleName="";
+				}
+				elsif (/include\s+\$\(BUILD_EXECUTABLE\)/)
+				{
+					$module->{$currentModuleName}->{"type"}="";
+					$module->{$currentModuleName}->{"defaultpath"}="system/bin";
+				}
+				elsif (/include\s+\$\(BUILD_JAVA_LIBRARY\)/)
+				{
+					$module->{$currentModuleName}->{"type"}="jar";
+					$module->{$currentModuleName}->{"defaultpath"}="system/framework"
+				}
+				elsif (/include\s+\$\(BUILD_PACKAGE\)/)
+				{
+					$module->{$currentModuleName}->{"type"}="apk";
+					$module->{$currentModuleName}->{"defaultpath"}="system/app";
+				}
+				elsif (/include\s+\$\(BUILD_SHARED_LIBRARY\)/)
+				{
+					$module->{$currentModuleName}->{"type"}="so";
+					$module->{$currentModuleName}->{"defaultpath"}="system/lib";
+				}
+				elsif (/include\s+\$\(BUILD_STATIC_LIBRARY\)/)
+				{
+					if($option{"v"})
+					{
+						$module->{$currentModuleName}->{"type"}="a";
+					}
+					else
+					{
+						$module->{$currentModuleName}->{"type"}="not_need";
+					}
+					$module->{$currentModuleName}->{"defaultpath"}="_intermediates";
+				}
+				elsif (/include\s+\$\(BUILD_STATIC_JAVA_LIBRARY\)/)
+				{
+					if($option{"v"})
+					{
+						$module->{$currentModuleName}->{"type"}="b";
+					}
+					else
+					{
+						$module->{$currentModuleName}->{"type"}="not_need";
+					}
+					$module->{$currentModuleName}->{"defaultpath"}="_intermediates";
+				}
+				elsif (/include\s+\$\(BUILD_DROIDDOC\)/)
+				{
+					$module->{$currentModuleName}->{"type"}="not_need";
+				}
+		
+			}
+			
+			my $count= keys %$module;
+			if ($count>0)
+			{
+				printGreen ("处理makefile是${BinPath}下的Android.mk\n");
+				printGreenBlue("*通常的编译命令是 ./mk mm ${BinPath}\n\n");
+				
+				
+				foreach  (sort keys %$module)
+				{
+					if(defined $module->{$_}->{"type"})
+					{
+						if($module->{$_}->{"type"} eq "not_need")
+						{
+							next;
+						}
+						unless (defined $module->{$_}->{"path"})
+						{
+							$module->{$_}->{"path"}=$module->{$_}->{"defaultpath"}
+						}
+						$module->{$_}->{"path"}=~s{\$\(TARGET_OUT_JAVA_LIBRARIES\)}{system/framework};
+						$module->{$_}->{"path"}=~s{\$\(TARGET_OUT_SHARED_LIBRARIES\)}{system/lib};
+						$module->{$_}->{"path"}=~s{\$\(TARGET_OUT_ETC\)}{system/etc};
+					}
+					else
+					{
+						printRed_R ("未知的模块,请扩展$0的代码\n");
+						next;
+					}
+					printGreen("可能的模块是: $_\n");
+					printGreenBlue("可以尝试用命令 ./mk r dr $_\n") if($option{"v"});
+					if($module->{$_}->{"type"})
+					{
+						if($module->{$_}->{"type"} eq "a")
+						{
+							printGreen ("可能的输出是: obj/STATIC_LIBRARIES/$_$module->{$_}->{'path'}/$_\.$module->{$_}->{'type'}\n\n");
+						}
+						elsif($module->{$_}->{"type"} eq "b")
+						{
+							printGreen ("可能的输出是: obj/JAVA_LIBRARIES/$_$module->{$_}->{'path'}/javalib.jar\n\n");
+						}
+						else
+						{
+							printGreen ("可能的输出是: $module->{$_}->{'path'}/$_\.$module->{$_}->{'type'}\n\n");
+						}
+					}
+					else
+					{
+						printGreen ("可能的输出是: $module->{$_}->{'path'}/$_\n\n");
+					}
+					$isok=1;
+					
+				}
+			}
+			
+		}
+		
+		$BinPath=~s{/$}{};
+		($BaseName,$BinPath)= &fileparse($BinPath);
+		
+	}
+	return $isok
+}
+
+sub getModuleFormOutput
+{
+	local $_;
+	my ($name)=@_;
+	my ($BaseName,$BinPath)= &fileparse($name);
+	
+	my $filelist=`find  out/target/product/ -iname "*.p" |xargs grep $BaseName`;
+	my @filelist=split /\n/,$filelist;
+	
+	my %module;
+	foreach (@filelist)
+	{
+		if($_=~m{.*/(.+)_intermediates.*})
+		{
+			$module{$1}=1;
+		}
+	}
+	foreach (sort keys %module)
+	{
+		printGreen ("可能的模块是: $_\n");
+		printGreenBlue("可以尝试用命令 ./mk r dr $_\n\n");
+	}
+
+}
+
+
+
+sub printgrey
+{
+	print "\033[30;1m";
+	print @_;
+	print "\033[0m";
+}
+
+
+sub printRed
+{
+	print "\033[31;1m";
+	print @_;
+	print "\033[0m";
+}
+
+sub printRed_R
+{
+	print "\033[31;7m";
+	print @_;
+	print "\033[0m";
+} 
+sub printGreen
+{
+	print "\033[32;1m";
+	print @_;
+	print "\033[0m";
+}
+
+sub printYellow
+{
+	print "\033[33;1m";
+	print @_;
+	print "\033[0m";
+} 
+
+sub printBlue
+{
+	print "\033[34;1m";
+	print @_;
+	print "\033[0m";
+} 
+
+sub printPink
+{
+	print "\033[35;1m";
+	print @_;
+	print "\033[0m";
+} 
+
+sub printGreenBlue
+{
+	print "\033[36;1m";
+	print @_;
+	print "\033[0m";
+} 
+
+sub printWhite
+{
+	print "\033[37;1m";
+	print @_;
+	print "\033[0m";
+} 
+
+
+sub Usage {
+
+  warn << "__END_OF_USAGE";
+
+Usage:
+	$0 [option] filename
+	
+	option:
+	    v:详细输出
+
+Example:
+    $0  mediatek/custom/ckt77_cu_ics2/kernel/vibrator/cust_vibrator.c
+
+History:
+    1.00 初始版本
+    1.01 增加对mediatek/source/frameworks的判断 苏 勇 2012年10月24日17:29:17
+    1.02 +增加对mediatek/custom下的hal的相关的判断 苏 勇 2013年11月02日11:55:13 
+         +修改判断的颜色,绿色是判断成功,也就是对于结果只要关心绿色的
+    1.03 +输出路径的初步判断  苏 勇 2013年11月06日15:11:31
+    1.04 +给出编译的命令提示,带*的优先选用 苏 勇 2013年12月16日14:59:46 
+    1.05 +BUILD_STATIC_LIBRARY 苏 勇 2014年03月12日16:51:43 
+    1.06 *多个目标时候的类型错误 苏 勇 2014年04月15日13:37:14
+    1.07 +BUILD_STATIC_JAVA_LIBRARY  BUILD_DROIDDOC 苏 勇 2014年04月18日16:37:18 
+          对BUILD_STATIC_LIBRARY和BUILD_STATIC_JAVA_LIBRARY缺省不显示,
+          -v后才显示
+          对BUILD_DROIDDOC直接忽略 
+__END_OF_USAGE
+  exit 1;
+}
